@@ -208,6 +208,33 @@ impl PixelMatrixImage {
     }
 }
 
+impl From<image::DynamicImage> for PixelMatrixImage {
+    fn from(value: image::DynamicImage) -> Self {
+        let mut data = [[Pixel::EMPTY; MATRIX_WIDTH]; MATRIX_HEIGHT];
+
+        let new_img = value
+            .resize_to_fill(
+                MATRIX_WIDTH as u32,
+                MATRIX_HEIGHT as u32,
+                image::imageops::FilterType::Nearest,
+            )
+            .into_rgb8();
+
+        for i in 0..MATRIX_HEIGHT {
+            for j in 0..MATRIX_WIDTH {
+                let p = new_img[(j as u32, i as u32)];
+                data[i][j] = Pixel::RGB(PixelRGB {
+                    r: p.0[0],
+                    g: p.0[1],
+                    b: p.0[2],
+                });
+            }
+        }
+
+        Self { data }
+    }
+}
+
 impl ScreenImage {
     pub fn to_rgb_buf(&self) -> [u8; IMAGE_WIDTH * IMAGE_HEIGHT * 3] {
         let mut buf: [u8; _] = [0; IMAGE_WIDTH * IMAGE_HEIGHT * 3];

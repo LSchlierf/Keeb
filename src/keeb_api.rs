@@ -162,7 +162,7 @@ impl KeebApi {
             let g = data[i * 3 + 1];
             let b = data[i * 3 + 2];
             let rp = r.map_range((0, 0xFF), (0, 0x1F)).unwrap();
-            let gp = g.map_range((0, 0xFF), (0, 0x3F)).unwrap(); // g has 6 bits instead of 4
+            let gp = g.map_range((0, 0xFF), (0, 0x3F)).unwrap(); // g has 6 bits instead of 5
             let bp = b.map_range((0, 0xFF), (0, 0x1F)).unwrap();
             packed[i * 2] = bp | (gp << 5);
             packed[i * 2 + 1] = (rp << 3) | (gp >> 3);

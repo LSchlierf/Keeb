@@ -25,6 +25,10 @@ struct CLI {
     /// Sets the color for the bitmap
     #[arg(short('c'), long("color"), value_name = "COLOR")]
     color: Option<u8>,
+
+    /// Sets the pixel matrix to an image
+    #[arg(short('m'), long("matrix"), value_name = "FILE")]
+    matrix_image: Option<String>
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -33,6 +37,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = CLI::parse();
 
     let mut k = KeebApi::new()?;
+
+    if let Some(path) = cli.matrix_image {
+        info!("Setting the matrix to {}", path);
+        let img = ImageReader::open(path)?.with_guessed_format()?.decode()?;
+        k.set_matrix_lighting(img.into())?;
+    }
 
     if let Some(pattern) = cli.matrix {
         let hue = cli.color.unwrap_or(0);
