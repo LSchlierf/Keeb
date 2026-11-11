@@ -1,6 +1,12 @@
 use std::{error::Error, time::Duration};
 
+use crate::image::IMAGE_HEIGHT;
+use crate::image::IMAGE_WIDTH;
+use crate::image::PixelMatrixImage;
+use crate::image::ScreenImage;
+
 use log::debug;
+use map_to_range::MapRange;
 use serialport::SerialPort;
 
 const VID: u16 = 0x514B;
@@ -11,6 +17,9 @@ const BUFFER_SIZE: usize = 64;
 enum Command {
     MatrixLightingSetInfo = 0xc0,
     MatrixLightingSetBuffer = 0xc1,
+    ImageFileSetInfo = 0xe0,
+    ImageFileSetBuffer = 0xe1,
+    // ImageFileSetCancel = 0xe2,
 }
 
 pub(crate) struct KeebApi {
@@ -124,12 +133,100 @@ impl KeebApi {
         Ok(())
     }
 
-    pub fn set_matrix_lighting(&mut self, data: &[[u8; 7]; 7]) -> Result<(), Box<dyn Error>> {
-        let buf: Vec<_> = data
-            .iter()
-            .flat_map(|r| r.iter().flat_map(|b| [191, 255, b * 255]))
-            .collect();
+    pub fn set_matrix_lighting(&mut self, data: PixelMatrixImage) -> Result<(), Box<dyn Error>> {
+        let buf = data.to_hsl_buf();
 
         self.set_matrix_lighting_impl(1, 10, 7, 7, &buf)
+    }
+
+    fn pack_image(data: &[u8; IMAGE_WIDTH * IMAGE_HEIGHT * 3]) -> [u8; IMAGE_WIDTH * IMAGE_HEIGHT * 2] {
+        // 16b per pixel
+        //
+        // wht 0xFFFF 0b1111111111111111
+        // blk 0x0000 0b0000000000000000
+        // red 0x00F8 0b0000000011111000
+        // grn 0xE007 0b1110000000000111
+        // blu 0x1F00 0b0001111100000000
+        //
+        // mgt 0x1FF8 0b0001111111111000
+        // ylw 0xE0FF 0b1110000011111111
+        // cyn 0xFF07 0b1111111100000111
+        //
+        // 6 "outer" bits for green
+        // 5 bits for red, blue each
+
+        let mut packed: [u8; _] = [0; IMAGE_WIDTH * IMAGE_HEIGHT * 2];
+
+        for i in 0..(IMAGE_WIDTH * IMAGE_HEIGHT) {
+            let r = data[i * 3];
+            let g = data[i * 3 + 1];
+            let b = data[i * 3 + 2];
+            let rp = r.map_range((0, 0xFF), (0, 0x1F)).unwrap();
+            let gp = g.map_range((0, 0xFF), (0, 0x3F)).unwrap(); // g has 6 bits instead of 4
+            let bp = b.map_range((0, 0xFF), (0, 0x1F)).unwrap();
+            packed[i * 2] = bp | (gp << 5);
+            packed[i * 2 + 1] = (rp << 3) | (gp >> 3);
+        }
+
+        packed
+    }
+
+    fn set_image_impl(
+        &mut self,
+        data: [u8; IMAGE_WIDTH * IMAGE_HEIGHT * 2],
+    ) -> Result<(), Box<dyn Error>> {
+        let mut payload: Vec<u8> = vec![0x41, 0x42, 0x4B, 0x54, 0x14, 0x00, 0x14, 0x00, 0x14, 0xAE, 0x01, 0x00, 0x40, 0x01, 0xAC, 0x00, 0x00, 0x00, 0x01, 0x00];
+
+        self.serial_command(Command::ImageFileSetInfo, &payload)?;
+
+        let resp = self.serial_read()?;
+
+        if resp.len() > 21 && resp[21] == 0xEE {
+            debug!("Error");
+            return Ok(())
+        }
+
+        payload.extend_from_slice(&data);
+
+        let mut offset = 0;
+        let batch_size = BUFFER_SIZE - 8;
+
+        while offset < payload.len() {
+            let start = offset;
+            let end = offset + batch_size;
+            let buf = &payload[start..(end.min(payload.len()))];
+
+            let buffer: Vec<u8> = (offset as u32)
+                .to_be_bytes()
+                .iter()
+                .chain(&[buf.len() as u8])
+                .chain(buf)
+                .map(|b| *b)
+                .collect();
+
+            debug!(
+                "issuing offset 0x{:X} length {} (0x{:X})",
+                offset,
+                buf.len(),
+                buf.len()
+            );
+
+            debug!("{:02X?}", buffer);
+
+            self.serial_command(Command::ImageFileSetBuffer, &buffer)?;
+
+            offset += batch_size;
+        }
+
+        self.serial_read().unwrap_err();
+
+        Ok(())
+    }
+
+    pub fn set_image(
+        &mut self,
+        image: ScreenImage
+    ) -> Result<(), Box<dyn Error>> {
+        self.set_image_impl(Self::pack_image(&image.to_rgb_buf()))
     }
 }
